@@ -38,7 +38,7 @@ public class DialogEntry {
     // 用户选择的选项文本
     private String selectedOptionText;
     // 该对话条目完成后执行的命令
-    @SerializedName("commands")
+    @SerializedName(value = "commands", alternate = {"command"})
     private List<String> command;
 
     // 该对话条目的可见性命令
