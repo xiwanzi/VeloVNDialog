@@ -5,6 +5,7 @@ package top.yourzi.dialog.model;
  */
 public class BackgroundImageInfo {
     private String path; // 图片路径
+    @com.google.gson.annotations.SerializedName(value = "render_option", alternate = {"renderOption"})
     private BackgroundRenderOption renderOption; // 渲染选项
 
     public BackgroundImageInfo(String path, BackgroundRenderOption renderOption) {

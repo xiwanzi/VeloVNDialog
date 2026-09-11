@@ -1,141 +1,20 @@
 package top.yourzi.dialog.network;
 
-import java.util.List;
-
 import net.minecraft.client.Minecraft;
-import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.HandlerThread;
-import net.neoforged.neoforge.network.registration.PayloadRegistrar;
-import top.yourzi.dialog.Dialog;
-import top.yourzi.dialog.model.DialogSequence;
-import top.yourzi.dialog.server.ServerDialogSessions;
 
-public class NetworkHandler {
+public final class NetworkHandler {
+    private NetworkHandler() {}
 
-    public static void register(final RegisterPayloadHandlersEvent event) {
-         // 设置当前网络版本
-        final PayloadRegistrar registrar = event.registrar("2").executesOn(HandlerThread.NETWORK);
-
-        // Protocol 2 rejects legacy clients and removes the arbitrary-command endpoint.
-        registrar.playToServer(
-            DialogActionPacket.TYPE,
-            DialogActionPacket.STREAM_CODEC,
-            DialogActionPacket::handleServer
-        );
-        registrar.playToClient(DialogStatePacket.TYPE, DialogStatePacket.STREAM_CODEC, DialogStatePacket::handleClient);
-
-        // 注册 ReloadDialogsPacket (S2C)
-        registrar.playToClient(
-            ReloadDialogsPacket.TYPE,
-            ReloadDialogsPacket.STREAM_CODEC,
-            ReloadDialogsPacket::handleClient
-        );
-
-        // 注册 ListDialogsPacket (S2C)
-        registrar.playToClient(
-            ListDialogsPacket.TYPE,
-            ListDialogsPacket.STREAM_CODEC,
-            ListDialogsPacket::handleClient
-        );
-
-        // 注册 ShowDialogPacket (S2C)
-        registrar.playToClient(
-            ShowDialogPacket.TYPE,
-            ShowDialogPacket.STREAM_CODEC,
-            ShowDialogPacket::handleClient
-        );
-
-        // 注册 SendDialogDataPacket (S2C)
-        registrar.playToClient(
-            SendDialogDataPacket.TYPE,
-            SendDialogDataPacket.STREAM_CODEC,
-            SendDialogDataPacket::handleClient
-        );
-        // 注册 SyncAllDialogsPacket (S2C)
-        registrar.playToClient(
-            SyncAllDialogsPacket.TYPE,
-            SyncAllDialogsPacket.STREAM_CODEC,
-            SyncAllDialogsPacket::handleClient
-        );
-
-        // 注册 RequestDialogPacket (C2S)
-        registrar.playToServer(
-            RequestDialogPacket.TYPE,
-            RequestDialogPacket.STREAM_CODEC,
-            RequestDialogPacket::handleServer
-        );
+    public static void register(RegisterPayloadHandlersEvent event) {
+        var registrar = event.registrar("3").executesOn(HandlerThread.NETWORK);
+        registrar.playToServer(DialogActionPacket.TYPE, DialogActionPacket.STREAM_CODEC, DialogActionPacket::handleServer);
+        registrar.playToClient(DialogFramePacket.TYPE, DialogFramePacket.STREAM_CODEC, DialogFramePacket::handleClient);
     }
 
-    /**
-     * 向指定玩家发送显示对话的网络包
-     */
-    public static boolean sendShowDialogToPlayer(ServerPlayer player, DialogSequence sequence) {
-        return ServerDialogSessions.open(player, sequence);
-    }
-    
-    /**
-     * 向指定玩家发送重新加载对话的网络包
-     */
-    public static void sendReloadDialogsToPlayer(ServerPlayer player) {
-        PacketDistributor.sendToPlayer(player, new ReloadDialogsPacket());
-    }
-    
-    /**
-     * 向所有玩家发送重新加载对话的网络包
-     */
-    public static void sendReloadDialogsToAll() {
-        PacketDistributor.sendToAllPlayers(new ReloadDialogsPacket());
-    }
-    
-    /**
-     * 向指定玩家发送对话列表的网络包
-     */
-    public static void sendDialogListToPlayer(ServerPlayer player, List<String> dialogIds, List<String> dialogNames) {
-        PacketDistributor.sendToPlayer(player, new ListDialogsPacket(dialogIds, dialogNames));
-    }
-
-    /**
-     * 客户端向服务端发送请求特定对话数据的网络包
-     */
-    public static void sendRequestDialogToServer(String dialogId) {
-        if (Minecraft.getInstance() != null && Minecraft.getInstance().getConnection() != null) {
-            PacketDistributor.sendToServer(new RequestDialogPacket(dialogId));
-        } else {
-            Dialog.LOGGER.warn("Cannot send RequestDialogPacket: not on client or no connection.");
-        }
-    }
-
-    /**
-     * 服务端向指定玩家发送特定对话数据的网络包
-     */
-    public static void sendDialogDataToPlayer(ServerPlayer player, String dialogId, String dialogJson) {
-        PacketDistributor.sendToPlayer(player, new SendDialogDataPacket(dialogId, dialogJson));
-    }
-
-    /**
-     * 服务端向指定玩家发送所有对话数据的网络包。
-     */
-    public static void sendAllDialogsToPlayer(ServerPlayer player, java.util.Map<String, String> dialogDataMap) {
-        PacketDistributor.sendToPlayer(player, new SyncAllDialogsPacket(dialogDataMap));
-    }
-
-    /**
-     * 服务端向所有玩家发送所有对话数据的网络包。
-     */
-    public static void sendAllDialogsToAllPlayers(java.util.Map<String, String> dialogDataMap) {
-        PacketDistributor.sendToAllPlayers(new SyncAllDialogsPacket(dialogDataMap));
-    }
-
-    /**
-     * 客户端向服务端发送执行命令请求的网络包
-     */
-    public static void sendDialogActionToServer(DialogActionPacket action) {
-        if (Minecraft.getInstance() != null && Minecraft.getInstance().getConnection() != null) {
-            PacketDistributor.sendToServer(action);
-        } else {
-            Dialog.LOGGER.warn("Cannot send dialog action: no connection.");
-        }
+    public static void sendAction(DialogActionPacket action) {
+        if (Minecraft.getInstance().getConnection() != null) PacketDistributor.sendToServer(action);
     }
 }

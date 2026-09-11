@@ -1,64 +1,47 @@
 package top.yourzi.dialog.event;
 
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.minecraft.server.packs.resources.PreparableReloadListener;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.util.profiling.ProfilerFiller;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import top.yourzi.dialog.Dialog;
-import top.yourzi.dialog.DialogManager;
-import top.yourzi.dialog.network.NetworkHandler;
-import java.util.Map;
-import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.server.packs.resources.PreparableReloadListener;
-import net.minecraft.util.profiling.ProfilerFiller;
+import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
+import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import top.yourzi.dialog.Dialog;
 import top.yourzi.dialog.server.ServerDialogSessions;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+
 @EventBusSubscriber(modid = Dialog.MODID)
-public class PlayerEventHandler {
-
-    @SubscribeEvent
-    public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player) ServerDialogSessions.remove(player.getUUID());
+public final class PlayerEventHandler {
+    @SubscribeEvent public static void onStarted(ServerStartedEvent event) {
+        ServerDialogSessions.get().initializeIntegrations(event.getServer().getClass().getClassLoader());
+    }
+    @SubscribeEvent public static void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) ServerDialogSessions.get().remove(player.getUUID());
     }
 
-    @SubscribeEvent
-    public static void onServerStopped(ServerStoppedEvent event) {
-        ServerDialogSessions.clear();
-    }
+    @SubscribeEvent public static void onServerStopped(ServerStoppedEvent event) { ServerDialogSessions.get().clear(); }
 
-    @SubscribeEvent
-    public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player) {
-            Map<String, String> allDialogJsons = DialogManager.getInstance().getAllDialogJsonsForSync();
-            if (!allDialogJsons.isEmpty()) {
-                NetworkHandler.sendAllDialogsToPlayer(player, allDialogJsons);
-            } else {
-                // 如果没有对话数据，也发送一个空包，以确保客户端清空旧缓存（如果存在）
-                NetworkHandler.sendAllDialogsToPlayer(player, new java.util.HashMap<>());
-                Dialog.LOGGER.warn("There is no conversation data to be synchronized to the player {}, send an empty sync packet to clear the client cache.", player.getName().getString());
-            }
-        }
-    }
-
-    @SubscribeEvent
-    public static void onAddReloadListener(AddReloadListenerEvent event) {
+    @SubscribeEvent public static void onReload(AddReloadListenerEvent event) {
         event.addListener(new PreparableReloadListener() {
-            @Override
-            public CompletableFuture<Void> reload(PreparationBarrier preparationBarrier, ResourceManager resourceManager,
-                                                  ProfilerFiller preparationsProfiler, ProfilerFiller reloadProfiler, 
-                                                  Executor backgroundExecutor, Executor gameExecutor) {
-                return CompletableFuture.runAsync(() -> {
-                    DialogManager.getInstance().loadDialogsFromServer(resourceManager);
-                }, backgroundExecutor).thenCompose(preparationBarrier::wait);
-            }
-
-            @Override
-            public String getName() {
-                return Dialog.MODID + "_dialog_reloader"; // 给监听器一个唯一的名字
+            @Override public CompletableFuture<Void> reload(PreparationBarrier barrier, ResourceManager resources,
+                    ProfilerFiller preparationProfiler, ProfilerFiller applyProfiler, Executor backgroundExecutor, Executor gameExecutor) {
+                var catalog = ServerDialogSessions.get().catalog();
+                return CompletableFuture.supplyAsync(() -> {
+                    try { return catalog.prepare(resources, FMLPaths.CONFIGDIR.get().resolve("velovn/dialogs")); }
+                    catch (RuntimeException e) {
+                        Dialog.LOGGER.error("Dialog reload rejected; keeping the previous catalog", e);
+                        return null;
+                    }
+                }, backgroundExecutor).thenCompose(barrier::wait).thenAcceptAsync(prepared -> {
+                    if (prepared != null) catalog.publish(prepared);
+                }, gameExecutor);
             }
         });
     }

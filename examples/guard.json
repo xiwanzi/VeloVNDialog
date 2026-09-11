@@ -1,0 +1,43 @@
+{
+  "id": "guard",
+  "title": "城门守卫",
+  "start": [
+    {"when": {"var": {"faction": "a"}}, "target": "a"},
+    {"when": {"var": {"faction": "b"}}, "target": "b"},
+    {"target": "choose"}
+  ],
+  "entries": [
+    {
+      "id": "a",
+      "speaker": "守卫",
+      "text": {"random": ["A 阵营的朋友，欢迎回来。", "是你啊，@i。A 阵营的补给已经到了。"]},
+      "next": "balance"
+    },
+    {
+      "id": "b",
+      "speaker": "守卫",
+      "text": {"random": ["B 阵营的使者，请走侧门。", "@i，B 阵营的联络人在等你。"]},
+      "next": "balance"
+    },
+    {
+      "id": "choose",
+      "speaker": "守卫",
+      "text": "你打算加入哪一方？",
+      "options": [
+        {"id": "a", "text": "加入 A 阵营", "set": {"faction": "a"}, "target": "a"},
+        {"id": "b", "text": "加入 B 阵营", "set": {"faction": "b"}, "target": "b"}
+      ]
+    },
+    {
+      "id": "balance",
+      "speaker": "守卫",
+      "text": "你当前有 %xconomy_balance_value% 信用点。",
+      "options": [
+        {"text": "进入贵宾区", "when": {"permission": "story.vip"}, "target": "vip"},
+        {"text": "先告辞了", "target": "bye"}
+      ]
+    },
+    {"id": "vip", "speaker": "守卫", "text": "请进，贵宾区为你开放。", "end": true},
+    {"id": "bye", "speaker": "守卫", "text": "一路平安。", "end": true}
+  ]
+}

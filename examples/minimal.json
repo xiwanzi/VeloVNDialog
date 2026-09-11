@@ -1,0 +1,6 @@
+{
+  "id": "hello",
+  "entries": [
+    {"id": "start", "speaker": "向导", "text": "你好，@i！"}
+  ]
+}
