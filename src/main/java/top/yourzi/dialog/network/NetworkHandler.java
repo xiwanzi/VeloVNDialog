@@ -9,19 +9,22 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.HandlerThread;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import top.yourzi.dialog.Dialog;
+import top.yourzi.dialog.model.DialogSequence;
+import top.yourzi.dialog.server.ServerDialogSessions;
 
 public class NetworkHandler {
 
     public static void register(final RegisterPayloadHandlersEvent event) {
          // 设置当前网络版本
-        final PayloadRegistrar registrar = event.registrar("1").executesOn(HandlerThread.NETWORK);;
+        final PayloadRegistrar registrar = event.registrar("2").executesOn(HandlerThread.NETWORK);
 
-        // 注册 ExecuteServerCommandPacket (C2S)
+        // Protocol 2 rejects legacy clients and removes the arbitrary-command endpoint.
         registrar.playToServer(
-            ExecuteServerCommandPacket.TYPE,
-            ExecuteServerCommandPacket.STREAM_CODEC,
-            ExecuteServerCommandPacket::handleServer
+            DialogActionPacket.TYPE,
+            DialogActionPacket.STREAM_CODEC,
+            DialogActionPacket::handleServer
         );
+        registrar.playToClient(DialogStatePacket.TYPE, DialogStatePacket.STREAM_CODEC, DialogStatePacket::handleClient);
 
         // 注册 ReloadDialogsPacket (S2C)
         registrar.playToClient(
@@ -68,8 +71,8 @@ public class NetworkHandler {
     /**
      * 向指定玩家发送显示对话的网络包
      */
-    public static void sendShowDialogToPlayer(ServerPlayer player, String dialogId, String dialogJson) {
-        PacketDistributor.sendToPlayer(player, new ShowDialogPacket(dialogId, dialogJson));
+    public static boolean sendShowDialogToPlayer(ServerPlayer player, DialogSequence sequence) {
+        return ServerDialogSessions.open(player, sequence);
     }
     
     /**
@@ -115,7 +118,7 @@ public class NetworkHandler {
      * 服务端向指定玩家发送所有对话数据的网络包。
      */
     public static void sendAllDialogsToPlayer(ServerPlayer player, java.util.Map<String, String> dialogDataMap) {
-        PacketDistributor.sendToAllPlayers(new SyncAllDialogsPacket(dialogDataMap));
+        PacketDistributor.sendToPlayer(player, new SyncAllDialogsPacket(dialogDataMap));
     }
 
     /**
@@ -128,11 +131,11 @@ public class NetworkHandler {
     /**
      * 客户端向服务端发送执行命令请求的网络包
      */
-    public static void sendExecuteCommandToServer(String command) {
+    public static void sendDialogActionToServer(DialogActionPacket action) {
         if (Minecraft.getInstance() != null && Minecraft.getInstance().getConnection() != null) {
-            PacketDistributor.sendToServer(new ExecuteServerCommandPacket(command));
+            PacketDistributor.sendToServer(action);
         } else {
-            Dialog.LOGGER.warn("Cannot send ExecuteServerCommandPacket: not on client or no connection.");
+            Dialog.LOGGER.warn("Cannot send dialog action: no connection.");
         }
     }
 }

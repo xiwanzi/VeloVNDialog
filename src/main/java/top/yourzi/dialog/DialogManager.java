@@ -28,8 +28,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.Collections;
+import java.util.UUID;
+import top.yourzi.dialog.server.DialogSession;
 
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import com.mojang.brigadier.CommandDispatcher;
@@ -39,9 +40,12 @@ public class DialogManager {
     public static final Gson GSON = new GsonBuilder().create();
     private static final DialogManager INSTANCE = new DialogManager();
 
-    // 服务端: 存储所有从数据包加载的对话序列
-    // 客户端: 存储从服务端同步过来的对话序列
+    // Keep server content separate from client caches, including in an integrated server JVM.
     private final Map<String, DialogSequence> dialogSequences = new HashMap<>();
+    private final Map<String, DialogSequence> clientDialogSequences = new HashMap<>();
+    private UUID currentSessionId;
+    private int currentRevision;
+    private boolean actionPending;
     // 当前显示的对话序列
     private DialogSequence currentSequence;
     // 当前显示的对话条目
@@ -133,11 +137,19 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public void clearAllDialogsOnClient() {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
-        dialogSequences.clear();
+        clientDialogSequences.clear();
+        clearClientSession();
+        clearDialogHistory();
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    private void clearClientSession() {
+        currentSessionId = null;
         currentSequence = null;
         currentEntry = null;
-        clearDialogHistory();
+        actionPending = false;
+        isFastForwardingNext = false;
+        stopAutoPlay();
     }
 
     /**
@@ -146,8 +158,7 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public void receiveAllDialogsFromServer(Map<String, String> dialogDataMap) {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
-        clearAllDialogsOnClient(); // 先清空旧数据
+        clientDialogSequences.clear(); // Content updates must not invalidate the active session.
         dialogDataMap.forEach((id, json) -> {
             try {
                 DialogSequence sequence = GSON.fromJson(json, DialogSequence.class);
@@ -155,7 +166,7 @@ public class DialogManager {
                     if (!id.equals(sequence.getId())) {
                         Dialog.LOGGER.warn("Dialog ID mismatch! Expected ID: {}, ID in JSON: {}. Will use expected ID.", id, sequence.getId());
                     }
-                    dialogSequences.put(id, sequence); // 使用map的key作为权威ID
+                    clientDialogSequences.put(id, sequence); // 使用map的key作为权威ID
                     Dialog.LOGGER.debug("Client Successfully Cached Conversation. {}", id);
                 } else {
                     Dialog.LOGGER.warn("Parsing of the dialog data received from the server failed or the ID is null. ID: {}, JSON: {}", id, json);
@@ -165,7 +176,7 @@ public class DialogManager {
                 Dialog.LOGGER.debug("(ID: {}): {}", id, json, e);
             }
         });
-        if (dialogSequences.isEmpty() && !dialogDataMap.isEmpty()) {
+        if (clientDialogSequences.isEmpty() && !dialogDataMap.isEmpty()) {
             Dialog.LOGGER.warn("Dialog data has been received but the cache is empty after parsing, please check the JSON format and content.");
         }
     }
@@ -185,7 +196,7 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public List<DialogEntry> getDialogHistory() {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return Collections.emptyList();
+        if (Minecraft.getInstance().level == null || !Minecraft.getInstance().level.isClientSide) return Collections.emptyList();
         return new ArrayList<>(dialogHistory);
     }
 
@@ -203,7 +214,7 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public void recordChoiceForCurrentDialog(String optionText) {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
+        if (Minecraft.getInstance().level == null || !Minecraft.getInstance().level.isClientSide) return;
         if (currentEntry != null) {
             currentEntry.setSelectedOptionText(optionText);
             // 更新历史记录中最新的对应条目
@@ -387,13 +398,12 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public void receiveDialogData(String dialogId, String dialogJson) {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
+        if (Minecraft.getInstance().level == null || !Minecraft.getInstance().level.isClientSide) return;
         try {
             DialogSequence sequence = GSON.fromJson(dialogJson, DialogSequence.class);
             if (sequence != null && sequence.getId() != null) {
-                dialogSequences.put(sequence.getId(), sequence);
-                // 确保在主线程显示对话界面
-                Minecraft.getInstance().execute(() -> showDialog(dialogId));
+                clientDialogSequences.put(sequence.getId(), sequence);
+                // Cached content grants no authority to start a server session.
             } else {
                 Dialog.LOGGER.warn("Failed to parse the dialog data received from the server or the ID is null: {}", dialogId);
                 sendPlayerMessage(Component.translatable("dialog.manager.received_sequence_empty", dialogId));
@@ -410,34 +420,8 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public void showDialog(String dialogId) {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
-        stopAutoPlay(); // 每次对话启动时重置自动播放为关闭状态
-        DialogSequence sequence = getDialogSequence(dialogId);
-        if (sequence == null) {
-            NetworkHandler.sendRequestDialogToServer(dialogId);
-            sendPlayerMessage(Component.translatable("dialog.manager.requesting_from_server", dialogId));
-            return;
-        }
-        
-        clearDialogHistory(); // 开始新对话时清空历史记录
-        currentSequence = sequence;
-        currentEntry = sequence.getFirstEntry();
-        addDialogToHistory(currentEntry); // 将第一个条目加入历史记录
-        
-        if (currentEntry == null) {
-            Dialog.LOGGER.error("No entries found in dialog sequence: {}", dialogId);
-            sendPlayerMessage(Component.translatable("dialog.manager.no_entries", dialogId));
-            return;
-        }
-        // 获取玩家名称
-        String playerName = "";
-        if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.getGameProfile() != null) {
-            playerName = Minecraft.getInstance().player.getGameProfile().getName();
-        }
-        this.currentDialogPlayerName = playerName;
-
-        // 显示对话界面
-        Minecraft.getInstance().setScreen(new DialogScreen(currentSequence, currentEntry, playerName));
+        // The server applies the same permission check as /dialog show.
+        NetworkHandler.sendRequestDialogToServer(dialogId);
     }
 
         /**
@@ -446,8 +430,8 @@ public class DialogManager {
      * @param sequenceJson 包含完整对话序列（已过滤选项）的JSON字符串。
      */
     @OnlyIn(Dist.CLIENT)
-    public void receiveAndShowPlayerSpecificDialog(String dialogId, String sequenceJson) {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
+    public void receiveAndShowPlayerSpecificDialog(UUID sessionId, String dialogId, String sequenceJson) {
+        if (Minecraft.getInstance().level == null || !Minecraft.getInstance().level.isClientSide) return;
         
         stopAutoPlay(); // Reset auto-play
 
@@ -471,6 +455,9 @@ public class DialogManager {
         }
         
         clearDialogHistory();
+        currentSessionId = sessionId;
+        currentRevision = 0;
+        actionPending = false;
         currentSequence = playerSequence;
         currentEntry = playerSequence.getFirstEntry();
         
@@ -532,71 +519,57 @@ public class DialogManager {
      */
     @OnlyIn(Dist.CLIENT)
     public void showNextDialog() {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
-        if (currentSequence == null || currentEntry == null) {
-            return;
-        }
-        
-        DialogEntry nextEntry = currentSequence.getNextEntry(currentEntry);
-        if (nextEntry == null) {
-            // 对话结束，关闭对话界面
-            Minecraft.getInstance().setScreen(null);
-            currentSequence = null;
-            currentEntry = null;
-            return;
-        }
-        
-        currentEntry = nextEntry;
-        addDialogToHistory(currentEntry); // 将后续条目加入历史记录
-        // 更新对话界面
-        Minecraft.getInstance().setScreen(new DialogScreen(currentSequence, currentEntry, currentDialogPlayerName));
+        requestAction(DialogSession.ADVANCE);
     }
-    /**
-     * 根据选项跳转到指定的对话。
-     */
+
     @OnlyIn(Dist.CLIENT)
-    public void jumpToDialog(String targetId) {
-        if (Minecraft.getInstance() == null || !Minecraft.getInstance().level.isClientSide) return;
-        if (currentSequence == null) {
+    public void chooseOption(int index) {
+        requestAction(index);
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    private void requestAction(int optionIndex) {
+        if (Minecraft.getInstance().level == null || Minecraft.getInstance().getConnection() == null
+                || currentSessionId == null || currentEntry == null || actionPending) return;
+        actionPending = true;
+        NetworkHandler.sendDialogActionToServer(new DialogActionPacket(
+                currentSessionId, currentRevision, currentEntry.getId(), optionIndex));
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    public boolean isActionPending() {
+        return actionPending;
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    public void cancelDialog() {
+        if (currentSessionId != null && currentEntry != null && Minecraft.getInstance().getConnection() != null) {
+            NetworkHandler.sendDialogActionToServer(new DialogActionPacket(
+                    currentSessionId, currentRevision, currentEntry.getId(), DialogSession.CANCEL));
+        }
+        clearClientSession();
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    public void receiveDialogState(DialogStatePacket state) {
+        if (Minecraft.getInstance().level == null || !state.sessionId().equals(currentSessionId)
+                || state.revision() < currentRevision) return;
+        actionPending = false;
+        if (state.revision() == currentRevision) return; // Rejected action; keep the current node.
+        if (state.optionIndex() >= 0 && currentEntry != null && currentEntry.hasOptions()
+                && state.optionIndex() < currentEntry.getOptions().length) {
+            recordChoiceForCurrentDialog(currentEntry.getOptions()[state.optionIndex()]
+                    .getText(Minecraft.getInstance().level.registryAccess(), currentDialogPlayerName).getString());
+        }
+        currentRevision = state.revision();
+        DialogEntry next = state.entryId().isEmpty() ? null : currentSequence.findEntryById(state.entryId());
+        if (next == null) {
+            clearClientSession();
+            if (Minecraft.getInstance().screen instanceof DialogScreen) Minecraft.getInstance().setScreen(null);
             return;
         }
-        
-        DialogEntry targetEntry = currentSequence.findEntryById(targetId);
-        if (targetEntry == null) {
-            Dialog.LOGGER.error("Target dialog entry not found: {}", targetId);
-            sendPlayerMessage(Component.translatable("dialog.manager.target_not_found", targetId));
-            return;
-        }
-        
-        currentEntry = targetEntry;
-        addDialogToHistory(currentEntry); // 将跳转的条目加入历史记录
+        currentEntry = next;
+        addDialogToHistory(currentEntry);
         Minecraft.getInstance().setScreen(new DialogScreen(currentSequence, currentEntry, currentDialogPlayerName));
-    }
-
-    /**
-     * (服务端) 获取玩家当前对话序列。
-     */
-    private DialogSequence getDialogSequenceForPlayer(ServerPlayer player, String dialogId) {
-        DialogSequence sequence = dialogSequences.get(dialogId);
-        if (sequence != null) return sequence;
-        for (DialogSequence seq : dialogSequences.values()) {
-            if (seq.findEntryById(dialogId) != null) {
-                return seq;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * (服务端) 在服务器上代表玩家执行命令。
-     */
-    public void executeCommands(Player player, List<String> commands) {
-        if (commands != null && !commands.isEmpty()) {
-            for (String command : commands) {
-                if (command != null && !command.isEmpty()) {
-                    NetworkHandler.sendExecuteCommandToServer(command);
-                }
-            }
-        }
     }
 }

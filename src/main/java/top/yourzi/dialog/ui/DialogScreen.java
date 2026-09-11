@@ -27,13 +27,8 @@ import top.yourzi.dialog.model.PortraitAnimationType;
 import top.yourzi.dialog.model.PortraitPosition;
 import org.lwjgl.glfw.GLFW;
 import net.minecraft.client.Minecraft;
-import net.minecraft.server.packs.resources.Resource;
 
-import java.util.HashMap;
-import java.util.Optional;
-import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.io.InputStream;
 
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.WidgetSprites;
@@ -41,7 +36,6 @@ import net.minecraft.client.gui.components.WidgetSprites;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.gui.screens.ConfirmScreen;
-import top.yourzi.dialog.util.STBBackendImage;
 
 /**
  * 对话界面，用于显示对话框和立绘
@@ -58,7 +52,6 @@ public class DialogScreen extends Screen {
         long animationStartTime = -1;
         boolean loadedSuccessfully = false;
 
-        private final static HashMap<ResourceLocation, BufferedImage> CACHED = new HashMap<>();
 
         PortraitDisplayData(String path, float brightness, PortraitPosition position, PortraitAnimationType animationType) {
             if (path != null && !path.isEmpty()) {
@@ -77,30 +70,13 @@ public class DialogScreen extends Screen {
 
         private void loadDimensions() {
             if (this.resourceLocation == null) return;
-            var target_bufferedimage = CACHED.get(this.resourceLocation);
-            if (target_bufferedimage == null) {
-                try {
-                    Optional<Resource> resourceOptional = Minecraft.getInstance().getResourceManager().getResource(this.resourceLocation);
-                    if (resourceOptional.isPresent()) {
-                        try (final var inputStream = resourceOptional.get().open()) {
-                            target_bufferedimage = STBBackendImage.read(inputStream);
-                            this.actualWidth = target_bufferedimage.getWidth();
-                            this.actualHeight = target_bufferedimage.getHeight();
-                            this.loadedSuccessfully = true;
-                            CACHED.put(this.resourceLocation, target_bufferedimage);
-                        }
-                    } else {
-                        Dialog.LOGGER.warn("Portrait resource not found: {}.", this.resourceLocation);
-                    }
-                } catch (IOException e) {
-                    Dialog.LOGGER.error("Error reading portrait image {}: {}.", this.resourceLocation, e.getMessage());
-                } catch (Exception e) {
-                    Dialog.LOGGER.error("Unexpected error loading portrait image {}: {}.", this.resourceLocation, e.getMessage());
-                }
-            } else {
-                this.actualWidth = target_bufferedimage.getWidth();
-                this.actualHeight = target_bufferedimage.getHeight();
+            try {
+                var dimensions = DialogImageCache.get(Minecraft.getInstance().getResourceManager(), resourceLocation);
+                this.actualWidth = dimensions.width();
+                this.actualHeight = dimensions.height();
                 this.loadedSuccessfully = true;
+            } catch (IOException e) {
+                Dialog.LOGGER.warn("Cannot read portrait dimensions: {}", resourceLocation, e);
             }
         }
     }
@@ -132,6 +108,7 @@ public class DialogScreen extends Screen {
 
     // 快速跳过相关
     private int fastForwardCooldown = 0;
+    private long closingAt = -1;
     private boolean optionButtonsCreated = false; // 标记选项按钮是否已为当前条目创建
 
     // 对话历史记录界面相关
@@ -228,7 +205,6 @@ public class DialogScreen extends Screen {
         private static class BackgroundImageDisplayData {
             private final ResourceLocation imageLocation;
             private final BackgroundRenderOption renderOption;
-            private STBBackendImage image;
             private boolean loadedSuccessfully = false;
             private int imageWidth;
             private int imageHeight;
@@ -241,7 +217,7 @@ public class DialogScreen extends Screen {
     
             public BackgroundImageDisplayData(BackgroundImageInfo backgroundImageInfo) {
                 this.imageLocation = ResourceLocation.fromNamespaceAndPath(Dialog.MODID, "textures/backgrounds/" + backgroundImageInfo.getPath());
-                this.renderOption = backgroundImageInfo.getRenderOption();
+                this.renderOption = backgroundImageInfo.getRenderOption() == null ? BackgroundRenderOption.FILL : backgroundImageInfo.getRenderOption();
                 loadResource();
                 // 初始化时启动淡入动画
                 if (loadedSuccessfully) {
@@ -294,27 +270,12 @@ public class DialogScreen extends Screen {
     
             private void loadResource() {
                 try {
-                    Optional<Resource> resourceOptional = Minecraft.getInstance().getResourceManager().getResource(imageLocation);
-                    if (resourceOptional.isPresent()) {
-                        try (InputStream inputStream = resourceOptional.get().open()) {
-                            this.image = STBBackendImage.read(inputStream);
-                            this.imageWidth = image.getWidth();
-                            this.imageHeight = image.getHeight();
-                            this.loadedSuccessfully = true;
-                        } catch (IOException e) {
-                            Dialog.LOGGER.error("Failed to load background image: {}", imageLocation, e);
-                        }
-                    } else {
-                        Dialog.LOGGER.warn("Background image resource not found: {}", imageLocation);
-                    }
-                } catch (Exception e) {
-                    Dialog.LOGGER.error("Error accessing background image resource: {}", imageLocation, e);
-                }
-            }
-    
-            public void close() {
-                if (image != null) {
-                    image.close();
+                    var dimensions = DialogImageCache.get(Minecraft.getInstance().getResourceManager(), imageLocation);
+                    this.imageWidth = dimensions.width();
+                    this.imageHeight = dimensions.height();
+                    this.loadedSuccessfully = true;
+                } catch (IOException e) {
+                    Dialog.LOGGER.warn("Cannot read background dimensions: {}", imageLocation, e);
                 }
             }
         }
@@ -418,6 +379,7 @@ public class DialogScreen extends Screen {
 
         for (int i = 0; i < options.length; i++) {
             DialogOption option = options[i];
+            final int optionIndex = i;
             int buttonY = startY + i * (buttonHeight + buttonSpacing);
             
             OptionButton button = new OptionButton(
@@ -427,12 +389,7 @@ public class DialogScreen extends Screen {
                     buttonHeight,              // height
                     sprites, // WidgetSprites - 您需要根据需要提供合适的 WidgetSprites
                     b -> {                     // OnPress
-                        // 执行选项指令（如果存在）
-                        if (option.getCommand() != null && !option.getCommand().isEmpty()) {
-                            DialogManager.getInstance().executeCommands(this.getMinecraft().player, option.getCommand());
-                        }
-                        DialogManager.getInstance().recordChoiceForCurrentDialog(option.getText(Minecraft.getInstance().level.registryAccess(), playerName).getString());
-                        DialogManager.getInstance().jumpToDialog(option.getTargetId());
+                        DialogManager.getInstance().chooseOption(optionIndex);
                     },
                     option.getText(Minecraft.getInstance().level.registryAccess(), playerName) // Component message
             );
@@ -664,13 +621,10 @@ public class DialogScreen extends Screen {
             }
 
             // 如果自动播放开启，且文本完全显示，且没有选项，则延迟后自动前进
-            if (DialogManager.isAutoPlaying() && textFullyDisplayed && !dialogEntry.hasOptions()) {
+            if (closingAt < 0 && !DialogManager.getInstance().isActionPending()
+                    && DialogManager.isAutoPlaying() && textFullyDisplayed && !dialogEntry.hasOptions()) {
                 if (System.currentTimeMillis() - lastCharTime > Config.AUTO_ADVANCE_DELAY.get()) { // lastCharTime 在文本完全显示后更新
                     DialogManager.getInstance().showNextDialog();
-                    // 执行当前对话条目的指令
-                    if (dialogEntry.getCommand() != null && !dialogEntry.getCommand().isEmpty()) {
-                        DialogManager.getInstance().executeCommands(this.getMinecraft().player, dialogEntry.getCommand());
-                    }
                     return;
                 }
             }
@@ -727,7 +681,7 @@ public class DialogScreen extends Screen {
             updateAutoPlayButtonText();
         }
 
-        if (isCtrlPressed && !dialogEntry.hasOptions()) {
+        if (closingAt < 0 && !showingHistory && isCtrlPressed && !dialogEntry.hasOptions()) {
             if (fastForwardCooldown > 0) {
                 fastForwardCooldown--;
             } else {
@@ -748,6 +702,7 @@ public class DialogScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (closingAt >= 0 || DialogManager.getInstance().isActionPending()) return true;
         // 首先处理ESC键的特定行为
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             if (this.showingHistory) {
@@ -773,9 +728,6 @@ public class DialogScreen extends Screen {
             if (DialogManager.isAutoPlaying()) {
                 DialogManager.stopAutoPlay();
                 updateAutoPlayButtonText();
-            }
-            if (dialogEntry.getCommand() != null && !dialogEntry.getCommand().isEmpty()) {
-                DialogManager.getInstance().executeCommands(this.getMinecraft().player, dialogEntry.getCommand());
             }
             DialogManager.getInstance().showNextDialog();
             return true;
@@ -811,33 +763,17 @@ public class DialogScreen extends Screen {
     
     // 使用淡出效果关闭屏幕
     private void closeScreenWithFadeOut() {
-        // 在关闭对话框前启动背景图片淡出动画
+        if (closingAt >= 0) return;
+        DialogManager.getInstance().cancelDialog();
         if (this.backgroundImageDisplayData != null && this.backgroundImageDisplayData.loadedSuccessfully) {
+            if (minecraft.screen != this) minecraft.setScreen(this); // Return from the confirmation screen.
             this.backgroundImageDisplayData.startFadeOut();
-            // 延迟关闭对话框，等待淡出动画完成
-            new Thread(() -> {
-                try {
-                    Thread.sleep(BackgroundImageDisplayData.FADE_DURATION_MS);
-                    Minecraft.getInstance().execute(() -> {
-                        DialogManager.getInstance().stopAutoPlay();
-                        super.onClose();
-                    });
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    // 如果线程被中断，直接关闭对话框
-                    Minecraft.getInstance().execute(() -> {
-                        DialogManager.getInstance().stopAutoPlay();
-                        super.onClose();
-                    });
-                }
-            }).start();
+            closingAt = System.currentTimeMillis();
         } else {
-            // 如果没有背景图片，直接关闭对话框
-            DialogManager.getInstance().stopAutoPlay();
             super.onClose();
         }
     }
-    
+
     @Override
     public void onClose() {
         // 使用淡出效果关闭屏幕，而不是直接调用 super.onClose()
@@ -846,6 +782,7 @@ public class DialogScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (closingAt >= 0 || DialogManager.getInstance().isActionPending()) return true;
         // 如果点击，则关闭自动播放
         if (DialogManager.isAutoPlaying()) {
             DialogManager.stopAutoPlay();
@@ -874,10 +811,6 @@ public class DialogScreen extends Screen {
                     // 文本已完全显示
                     if (!dialogEntry.hasOptions()) {
                         // 如果没有选项，则推进对话
-                        // 执行当前对话条目的指令（如果存在）
-                        if (dialogEntry.getCommand() != null && !dialogEntry.getCommand().isEmpty()) {
-                            DialogManager.getInstance().executeCommands(this.getMinecraft().player, dialogEntry.getCommand());
-                        }
                         DialogManager.getInstance().showNextDialog();
                         return true; // 消费点击事件
                     }
@@ -909,6 +842,11 @@ public class DialogScreen extends Screen {
     @Override
     public void tick() {
         super.tick();
+        if (closingAt >= 0) {
+            if (System.currentTimeMillis() - closingAt >= BackgroundImageDisplayData.FADE_DURATION_MS
+                    && minecraft.screen == this) super.onClose();
+            return;
+        }
         updateAutoPlayButtonText(); 
 
 
@@ -929,7 +867,7 @@ public class DialogScreen extends Screen {
 
         } else {
             // 恢复主对话界面按钮
-            this.optionButtons.forEach(b -> b.active = true);
+            this.optionButtons.forEach(b -> b.active = !DialogManager.getInstance().isActionPending());
             if (this.viewHistoryButton != null) { // 确保按钮已初始化
                 this.viewHistoryButton.active = true;
             }

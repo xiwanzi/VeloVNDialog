@@ -14,9 +14,21 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
+import top.yourzi.dialog.server.ServerDialogSessions;
 
 @EventBusSubscriber(modid = Dialog.MODID)
 public class PlayerEventHandler {
+
+    @SubscribeEvent
+    public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) ServerDialogSessions.remove(player.getUUID());
+    }
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        ServerDialogSessions.clear();
+    }
 
     @SubscribeEvent
     public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {

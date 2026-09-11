@@ -1,6 +1,5 @@
 package top.yourzi.dialog.network;
 
-import com.google.gson.Gson;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -39,15 +38,12 @@ public record RequestDialogPacket(String dialogId) implements CustomPacketPayloa
     public static void handleServer(final RequestDialogPacket message, final IPayloadContext context) {
         context.enqueueWork(() -> {
             ServerPlayer sender = (ServerPlayer) context.player();
-            if (sender != null) {
+            if (sender != null && sender.createCommandSourceStack().hasPermission(2)) {
                 DialogManager dialogManager = DialogManager.getInstance();
                 DialogSequence sequence = dialogManager.getDialogSequence(message.dialogId);
                 if (sequence != null) {
-                    // 将DialogSequence序列化为JSON字符串
-                    Gson gson = new Gson();
-                    String dialogJson = gson.toJson(sequence);
-                    // 发送包含对话数据的包回客户端
-                    NetworkHandler.sendDialogDataToPlayer(sender, message.dialogId, dialogJson);
+                    DialogSequence filtered = dialogManager.createPlayerSpecificSequence(sequence, sender, sender.server);
+                    if (filtered != null) NetworkHandler.sendShowDialogToPlayer(sender, filtered);
                 } else {
                     top.yourzi.dialog.Dialog.LOGGER.warn("Player {} requested dialog '{}' which was not found on the server.", sender.getName().getString(), message.dialogId);
                 }
