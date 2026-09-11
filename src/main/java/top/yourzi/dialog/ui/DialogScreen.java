@@ -17,12 +17,12 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import top.yourzi.dialog.Config;
 import top.yourzi.dialog.Dialog;
-import top.yourzi.dialog.DialogManager;
+import top.yourzi.dialog.client.ClientDialogController;
+import top.yourzi.dialog.client.DialogTextLayout;
 import top.yourzi.dialog.model.BackgroundImageInfo;
 import top.yourzi.dialog.model.BackgroundRenderOption;
 import top.yourzi.dialog.model.DialogEntry;
 import top.yourzi.dialog.model.DialogOption;
-import top.yourzi.dialog.model.DialogSequence;
 import top.yourzi.dialog.model.PortraitAnimationType;
 import top.yourzi.dialog.model.PortraitPosition;
 import org.lwjgl.glfw.GLFW;
@@ -82,7 +82,6 @@ public class DialogScreen extends Screen {
     }
 
     // 对话序列和当前对话条目
-    private final DialogSequence dialogSequence;
     private final DialogEntry dialogEntry;
 
     // 对话框位置和大小
@@ -94,7 +93,6 @@ public class DialogScreen extends Screen {
     // 选项按钮列表
     private final List<OptionButton> optionButtons = new ArrayList<>();
 
-    private final String playerName;
 
     //立绘数据列表
     private final List<PortraitDisplayData> portraitDisplayList = new ArrayList<>();
@@ -102,6 +100,7 @@ public class DialogScreen extends Screen {
     private static final int ANIMATION_DURATION_MS = 300; // 动画持续时间，单位毫秒
 
     // 文本动画相关
+    private DialogTextLayout textLayout;
     private int currentCharIndex = 0;
     private long lastCharTime = 0;
     private boolean textFullyDisplayed = false;
@@ -130,13 +129,12 @@ public class DialogScreen extends Screen {
     private boolean canScrollHistoryDown = false;
     private boolean canScrollHistoryUp = false;
 
-    public DialogScreen(DialogSequence dialogSequence, DialogEntry dialogEntry, String playerName) {
+    public DialogScreen(DialogEntry dialogEntry) {
 
-        super(dialogEntry.getSpeaker() != null ? dialogEntry.getSpeaker(Minecraft.getInstance().level.registryAccess(), playerName) : Component.empty());
-        this.dialogSequence = dialogSequence;
+        super(dialogEntry.getSpeaker(Minecraft.getInstance().level.registryAccess()));
         this.dialogEntry = dialogEntry;
-        this.playerName = playerName;
         this.font = Minecraft.getInstance().font;
+        this.textFullyDisplayed = dialogEntry.getText(Minecraft.getInstance().level.registryAccess()).getString().isEmpty();
 
         // 加载背景图片资源
         if (dialogEntry.getBackgroundImage() != null && dialogEntry.getBackgroundImage().getPath() != null && !dialogEntry.getBackgroundImage().getPath().isEmpty()) {
@@ -195,9 +193,9 @@ public class DialogScreen extends Screen {
                 }
 
         // 检查是否由快速跳过触发
-        if (DialogManager.isFastForwardingNext()) {
+        if (ClientDialogController.isFastForwardingNext()) {
             this.fastForwardCooldown = 5;
-            DialogManager.setFastForwardingNext(false); // 重置标记
+            ClientDialogController.setFastForwardingNext(false); // 重置标记
         }
     }
 
@@ -289,6 +287,9 @@ public class DialogScreen extends Screen {
         dialogBoxHeight = Config.DIALOG_BOX_HEIGHT.get();
         dialogBoxX = (width - dialogBoxWidth) / 2;
         dialogBoxY = height - dialogBoxHeight - 20;
+        textLayout = new DialogTextLayout(font.split(dialogEntry.getText(Minecraft.getInstance().level.registryAccess()),
+                Math.max(1, dialogBoxWidth - Config.DIALOG_BOX_PADDING.get() * 2)));
+        if (textLayout.length() == 0) textFullyDisplayed = true;
 
         // 初始化查看历史按钮 (位于对话框右下角)
         int historyButtonWidth = 20;
@@ -314,8 +315,8 @@ public class DialogScreen extends Screen {
         
         // 如果此对话条目有选项，预先停止自动播放
         if (dialogEntry.hasOptions()) {
-            if (DialogManager.isAutoPlaying()) {
-                DialogManager.stopAutoPlay();
+            if (ClientDialogController.isAutoPlaying()) {
+                ClientDialogController.stopAutoPlay();
                 updateAutoPlayButtonText(); // 更新按钮文本以反映自动播放已停止
             }
         }
@@ -379,7 +380,6 @@ public class DialogScreen extends Screen {
 
         for (int i = 0; i < options.length; i++) {
             DialogOption option = options[i];
-            final int optionIndex = i;
             int buttonY = startY + i * (buttonHeight + buttonSpacing);
             
             OptionButton button = new OptionButton(
@@ -389,9 +389,9 @@ public class DialogScreen extends Screen {
                     buttonHeight,              // height
                     sprites, // WidgetSprites - 您需要根据需要提供合适的 WidgetSprites
                     b -> {                     // OnPress
-                        DialogManager.getInstance().chooseOption(optionIndex);
+                        ClientDialogController.getInstance().chooseOption(option.getId());
                     },
-                    option.getText(Minecraft.getInstance().level.registryAccess(), playerName) // Component message
+                    option.getText(Minecraft.getInstance().level.registryAccess()) // Component message
             );
             
             optionButtons.add(button);
@@ -540,7 +540,7 @@ public class DialogScreen extends Screen {
         }
 
         // 如果自动播放开启且无选项，显示提示
-        if (DialogManager.isAutoPlaying() && !dialogEntry.hasOptions()) {
+        if (ClientDialogController.isAutoPlaying() && !dialogEntry.hasOptions()) {
             Component autoPlayText = Component.literal("[AUTO]");
             int autoPlayTextWidth = this.font.width(autoPlayText);
             // 将提示显示在对话框的右上角外部一点或者左上角，避免遮挡按钮
@@ -553,21 +553,21 @@ public class DialogScreen extends Screen {
         int textY = dialogBoxY + padding;
         
         // 如果显示说话者名称且有说话者
-        Component speakerComponent = dialogEntry.getSpeaker(Minecraft.getInstance().level.registryAccess(), playerName);
+        Component speakerComponent = dialogEntry.getSpeaker(Minecraft.getInstance().level.registryAccess());
         if (Config.SHOW_SPEAKER_NAME.get() && speakerComponent != null && !speakerComponent.getString().isEmpty()) {
             guiGraphics.drawString(font, Component.literal("[").append(speakerComponent).append("]"), textX, textY, 0xFFFFFF);
             textY += font.lineHeight + 5;
         }
         
         // 渲染对话文本
-        String rawText = dialogEntry.getText(Minecraft.getInstance().level.registryAccess(), playerName).getString();
+        String rawText = dialogEntry.getText(Minecraft.getInstance().level.registryAccess()).getString();
         if (rawText != null && !rawText.isEmpty()) {
             int maxWidth = dialogBoxWidth - (padding * 2);
             int textAnimationSpeed = Config.TEXT_ANIMATION_SPEED.get(); // 每秒字符数
 
             if (textAnimationSpeed <= 0) { // 立即显示
                 textFullyDisplayed = true;
-                currentCharIndex = rawText.length();
+                currentCharIndex = textLayout.length();
             }
 
             if (!textFullyDisplayed) {
@@ -575,16 +575,13 @@ public class DialogScreen extends Screen {
                 if (lastCharTime == 0) { // 首次渲染或重置
                     lastCharTime = currentTime;
                 }
-                // 计算每字符间隔时间 (毫秒)
-                long charInterval = (textAnimationSpeed > 0) ? (1000 / textAnimationSpeed) : 0;
-                
-                if (currentTime - lastCharTime >= charInterval) {
-                    currentCharIndex++;
-                    lastCharTime = currentTime;
-                    if (currentCharIndex >= rawText.length()) {
+                int characters = (int) Math.min(Integer.MAX_VALUE, Math.max(0, currentTime - lastCharTime) * textAnimationSpeed / 1000L);
+                if (characters > 0) {
+                    currentCharIndex += Math.min(Math.max(0, textLayout.length() - currentCharIndex), characters);
+                    lastCharTime += characters * 1000L / textAnimationSpeed;
+                    if (currentCharIndex >= textLayout.length()) {
                         textFullyDisplayed = true;
-                        currentCharIndex = rawText.length(); // 确保索引不超过长度
-                        lastCharTime = System.currentTimeMillis(); // 记录文本完全显示的时间点，用于自动播放计时
+                        lastCharTime = currentTime;
                     }
                 }
             }
@@ -621,27 +618,17 @@ public class DialogScreen extends Screen {
             }
 
             // 如果自动播放开启，且文本完全显示，且没有选项，则延迟后自动前进
-            if (closingAt < 0 && !DialogManager.getInstance().isActionPending()
-                    && DialogManager.isAutoPlaying() && textFullyDisplayed && !dialogEntry.hasOptions()) {
+            if (closingAt < 0 && !ClientDialogController.getInstance().isActionPending()
+                    && ClientDialogController.isAutoPlaying() && textFullyDisplayed && !dialogEntry.hasOptions()) {
                 if (System.currentTimeMillis() - lastCharTime > Config.AUTO_ADVANCE_DELAY.get()) { // lastCharTime 在文本完全显示后更新
-                    DialogManager.getInstance().showNextDialog();
+                    ClientDialogController.getInstance().showNextDialog();
                     return;
                 }
             }
             
-            List<net.minecraft.util.FormattedCharSequence> lines;
-            if (textFullyDisplayed) {
-                lines = font.split(dialogEntry.getText(Minecraft.getInstance().level.registryAccess(), playerName), maxWidth);
-            } else {
-                String animatedString = rawText.substring(0, Math.min(currentCharIndex, rawText.length()));
-                if (animatedString.isEmpty()) {
-                    lines = java.util.Collections.emptyList();
-                } else {
-                    Component animatedTextComponent = Component.literal(animatedString);
-                    lines = font.split(animatedTextComponent, maxWidth);
-                }
-            }
-            
+            List<net.minecraft.util.FormattedCharSequence> lines = textLayout.visible(
+                    textFullyDisplayed ? textLayout.length() : currentCharIndex);
+
             for (net.minecraft.util.FormattedCharSequence line : lines) {
                 guiGraphics.drawString(font, line, textX, textY, Config.DIALOG_TEXT_COLOR.get());
                 textY += font.lineHeight;
@@ -676,22 +663,22 @@ public class DialogScreen extends Screen {
                                  GLFW.glfwGetKey(Minecraft.getInstance().getWindow().getWindow(), GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS);
 
         // 如果按下Ctrl键快速跳过，则关闭自动播放
-        if (isCtrlPressed && DialogManager.isAutoPlaying()) {
-            DialogManager.stopAutoPlay();
+        if (isCtrlPressed && ClientDialogController.isAutoPlaying()) {
+            ClientDialogController.stopAutoPlay();
             updateAutoPlayButtonText();
         }
 
-        if (closingAt < 0 && !showingHistory && isCtrlPressed && !dialogEntry.hasOptions()) {
+        if (closingAt < 0 && !showingHistory && dialogEntry.isSkipAllowed() && isCtrlPressed && !dialogEntry.hasOptions()) {
             if (fastForwardCooldown > 0) {
                 fastForwardCooldown--;
             } else {
-                DialogManager.setFastForwardingNext(true);
-                DialogManager.getInstance().showNextDialog();
+                ClientDialogController.setFastForwardingNext(true);
+                ClientDialogController.getInstance().showNextDialog();
                 return; // 立即跳到下一条，避免渲染当前帧的剩余部分
             }
         } else {
             // 如果Ctrl未按下或有选项，则清除快速跳过标记，确保正常流程
-            DialogManager.setFastForwardingNext(false);
+            ClientDialogController.setFastForwardingNext(false);
         }
     }
 
@@ -702,9 +689,10 @@ public class DialogScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (closingAt >= 0 || DialogManager.getInstance().isActionPending()) return true;
+        if (closingAt >= 0 || ClientDialogController.getInstance().isActionPending()) return true;
         // 首先处理ESC键的特定行为
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (!showingHistory && !dialogEntry.isCloseAllowed()) return true;
             if (this.showingHistory) {
                 // 如果在历史记录界面，ESC键返回对话界面
                 toggleHistoryScreen();
@@ -725,22 +713,22 @@ public class DialogScreen extends Screen {
 
         // 当文本完全显示，且没有选项时，按空格键可以手动前进
         if (textFullyDisplayed && !dialogEntry.hasOptions() && (keyCode == GLFW.GLFW_KEY_SPACE)) {
-            if (DialogManager.isAutoPlaying()) {
-                DialogManager.stopAutoPlay();
+            if (ClientDialogController.isAutoPlaying()) {
+                ClientDialogController.stopAutoPlay();
                 updateAutoPlayButtonText();
             }
-            DialogManager.getInstance().showNextDialog();
+            ClientDialogController.getInstance().showNextDialog();
             return true;
         }
 
         // 如果文本未完全显示，按空格则立即显示全部文本
         if (!textFullyDisplayed && (keyCode == GLFW.GLFW_KEY_SPACE)) {
-            if (DialogManager.isAutoPlaying()) {
-                DialogManager.stopAutoPlay();
+            if (ClientDialogController.isAutoPlaying()) {
+                ClientDialogController.stopAutoPlay();
                 updateAutoPlayButtonText();
             }
             textFullyDisplayed = true;
-            currentCharIndex = dialogEntry.getText(Minecraft.getInstance().level.registryAccess(), playerName).getString().length();
+            currentCharIndex = textLayout.length();
             lastCharTime = System.currentTimeMillis();
             return true;
         }
@@ -763,8 +751,9 @@ public class DialogScreen extends Screen {
     
     // 使用淡出效果关闭屏幕
     private void closeScreenWithFadeOut() {
+        if (!dialogEntry.isCloseAllowed()) return;
         if (closingAt >= 0) return;
-        DialogManager.getInstance().cancelDialog();
+        ClientDialogController.getInstance().cancelDialog();
         if (this.backgroundImageDisplayData != null && this.backgroundImageDisplayData.loadedSuccessfully) {
             if (minecraft.screen != this) minecraft.setScreen(this); // Return from the confirmation screen.
             this.backgroundImageDisplayData.startFadeOut();
@@ -782,10 +771,10 @@ public class DialogScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (closingAt >= 0 || DialogManager.getInstance().isActionPending()) return true;
+        if (closingAt >= 0 || ClientDialogController.getInstance().isActionPending()) return true;
         // 如果点击，则关闭自动播放
-        if (DialogManager.isAutoPlaying()) {
-            DialogManager.stopAutoPlay();
+        if (ClientDialogController.isAutoPlaying()) {
+            ClientDialogController.stopAutoPlay();
             updateAutoPlayButtonText();
         }
         if (super.mouseClicked(mouseX, mouseY, button)) {
@@ -804,14 +793,14 @@ public class DialogScreen extends Screen {
                 if (!textFullyDisplayed) {
                     // 如果文本未完全显示，点击使其完全显示
                     textFullyDisplayed = true;
-                    currentCharIndex = dialogEntry.getText(Minecraft.getInstance().level.registryAccess(), playerName).getString().length();
+                    currentCharIndex = textLayout.length();
                     lastCharTime = 0; // 重置动画或自动播放的时间
                     return true; // 消费点击事件
                 } else {
                     // 文本已完全显示
                     if (!dialogEntry.hasOptions()) {
                         // 如果没有选项，则推进对话
-                        DialogManager.getInstance().showNextDialog();
+                        ClientDialogController.getInstance().showNextDialog();
                         return true; // 消费点击事件
                     }
                 }
@@ -829,13 +818,13 @@ public class DialogScreen extends Screen {
     }
 
     private void toggleAutoPlay() {
-        DialogManager.setAutoPlaying(!DialogManager.isAutoPlaying());
+        ClientDialogController.setAutoPlaying(!ClientDialogController.isAutoPlaying());
         updateAutoPlayButtonText();
     }
 
     private void updateAutoPlayButtonText() {
         if (this.autoPlayButton != null) {
-            this.autoPlayButton.setMessage(Component.literal(DialogManager.isAutoPlaying() ? "⏸" : "▶"));
+            this.autoPlayButton.setMessage(Component.literal(ClientDialogController.isAutoPlaying() ? "⏸" : "▶"));
         }
     }
 
@@ -852,7 +841,7 @@ public class DialogScreen extends Screen {
 
     
         if (this.showingHistory) {
-            this.historyEntries = DialogManager.getInstance().getDialogHistory();
+            this.historyEntries = ClientDialogController.getInstance().getDialogHistory();
             // 禁用主对话界面按钮
             this.optionButtons.forEach(b -> b.active = false);
             if (this.viewHistoryButton != null) { // 确保按钮已初始化
@@ -867,7 +856,7 @@ public class DialogScreen extends Screen {
 
         } else {
             // 恢复主对话界面按钮
-            this.optionButtons.forEach(b -> b.active = !DialogManager.getInstance().isActionPending());
+            this.optionButtons.forEach(b -> b.active = !ClientDialogController.getInstance().isActionPending());
             if (this.viewHistoryButton != null) { // 确保按钮已初始化
                 this.viewHistoryButton.active = true;
             }
@@ -902,8 +891,8 @@ public class DialogScreen extends Screen {
         // 重新计算内容总高度
         totalHistoryContentHeight = 0;
         for (DialogEntry entry : historyEntries) {
-            Component currentEntrySpeaker = entry.getSpeaker(Minecraft.getInstance().level.registryAccess(), playerName);
-            Component dialogText = entry.getText(Minecraft.getInstance().level.registryAccess(), playerName);
+            Component currentEntrySpeaker = entry.getSpeaker(Minecraft.getInstance().level.registryAccess());
+            Component dialogText = entry.getText(Minecraft.getInstance().level.registryAccess());
             Component lineToRender;
             if (dialogText == null) dialogText = Component.empty();
             if (currentEntrySpeaker != null && !currentEntrySpeaker.getString().isEmpty()) {
@@ -944,8 +933,8 @@ public class DialogScreen extends Screen {
         for (DialogEntry entry : historyEntries) {
 
 
-            Component currentEntrySpeaker = entry.getSpeaker(Minecraft.getInstance().level.registryAccess(), playerName);
-            Component dialogText = entry.getText(Minecraft.getInstance().level.registryAccess(), playerName);
+            Component currentEntrySpeaker = entry.getSpeaker(Minecraft.getInstance().level.registryAccess());
+            Component dialogText = entry.getText(Minecraft.getInstance().level.registryAccess());
             Component lineToRender;
 
             if (dialogText == null) {

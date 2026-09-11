@@ -1,136 +1,95 @@
 package top.yourzi.dialog.command;
 
-import com.mojang.brigadier.CommandDispatcher;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.fml.loading.FMLPaths;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import top.yourzi.dialog.Dialog;
-import top.yourzi.dialog.DialogManager;
-import top.yourzi.dialog.model.DialogSequence;
+import top.yourzi.dialog.server.SavedDialogVariables;
+import top.yourzi.dialog.server.ServerDialogSessions;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-
-/**
- * 对话系统命令处理器。
- */
 @EventBusSubscriber(modid = Dialog.MODID)
-public class DialogCommand {
-
-    /**
-     * 注册命令。
-     */
-    @SubscribeEvent
-    public static void onRegisterCommands(RegisterCommandsEvent event) {
-        CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
-        
-        // 注册 /dialog 命令
-        dispatcher.register(
-            Commands.literal("dialog")
-                .requires(source -> source.hasPermission(2)) // 要求权限等级2 (OP)
-                .then(Commands.literal("show")
-                    .then(Commands.argument("id", StringArgumentType.string())
-                        .executes(context -> showDialog(context, StringArgumentType.getString(context, "id")))))
-                .then(Commands.literal("reload")
-                    .executes(DialogCommand::reloadDialogs))
-                .then(Commands.literal("list")
-                    .executes(DialogCommand::listDialogs))
-        );
+public final class DialogCommand {
+    @SubscribeEvent public static void register(RegisterCommandsEvent event) {
+        event.getDispatcher().register(Commands.literal("dialog").requires(source -> source.hasPermission(2))
+            .executes(ctx -> help(ctx.getSource()))
+            .then(Commands.literal("show").then(Commands.argument("id", StringArgumentType.string())
+                .suggests((ctx, builder) -> SharedSuggestionProvider.suggest(ServerDialogSessions.get().catalog().snapshot().keySet(), builder))
+                .executes(ctx -> show(ctx, ctx.getSource().getPlayerOrException()))
+                .then(Commands.argument("player", EntityArgument.player()).executes(ctx -> show(ctx, EntityArgument.getPlayer(ctx, "player"))))))
+            .then(Commands.literal("reload").executes(ctx -> reload(ctx.getSource())))
+            .then(Commands.literal("list").executes(ctx -> list(ctx.getSource())))
+            .then(Commands.literal("refresh")
+                .executes(ctx -> refresh(ctx.getSource().getPlayerOrException()))
+                .then(Commands.argument("player", EntityArgument.player()).executes(ctx -> refresh(EntityArgument.getPlayer(ctx, "player")))))
+            .then(Commands.literal("var").then(Commands.argument("player", EntityArgument.player())
+                .then(Commands.argument("key", StringArgumentType.string())
+                    .executes(ctx -> variable(ctx, false))
+                    .then(Commands.argument("value", StringArgumentType.greedyString()).executes(ctx -> variable(ctx, true)))))));
     }
-    
-    /**
-     * 显示指定ID的对话。
-     */
-    private static int showDialog(CommandContext<CommandSourceStack> context, String dialogId) {
-        CommandSourceStack source = context.getSource();
-        
-        if (source.getEntity() instanceof ServerPlayer player) {
-            DialogManager dialogManager = DialogManager.getInstance();
-            DialogSequence originalSequence = dialogManager.getDialogSequence(dialogId);
 
-            if (originalSequence == null) {
-                source.sendFailure(Component.literal("Dialog with ID '" + dialogId + "' not found."));
-                return 0;
-            }
+    private static int show(CommandContext<CommandSourceStack> context, ServerPlayer player) {
+        String id = StringArgumentType.getString(context, "id");
+        if (ServerDialogSessions.get().open(player, id)) return 1;
+        context.getSource().sendFailure(Component.translatable("dialog.error.unavailable", id));
+        if (context.getSource().getEntity() != player) player.sendSystemMessage(Component.translatable("dialog.unavailable"));
+        return 0;
+    }
 
-            // 为玩家创建特定对话序列 (过滤选项)
-            DialogSequence playerSpecificSequence = dialogManager.createPlayerSpecificSequence(originalSequence, player, source.getServer());
-            if (playerSpecificSequence == null) {
-                 source.sendFailure(Component.literal("Failed to create player-specific dialog for ID '" + dialogId + "'."));
-                 return 0;
-            }
-
-            return top.yourzi.dialog.network.NetworkHandler.sendShowDialogToPlayer(player, playerSpecificSequence) ? 1 : 0;
-        } else {
-            source.sendFailure(Component.translatable("dialog.command.show.player_only"));
+    private static int reload(CommandSourceStack source) {
+        try {
+            var catalog = ServerDialogSessions.get().catalog();
+            var prepared = catalog.prepare(source.getServer().getResourceManager(), FMLPaths.CONFIGDIR.get().resolve("velovn/dialogs"));
+            catalog.publish(prepared);
+            source.sendSuccess(() -> Component.translatable("dialog.reload.success", prepared.size()), true);
+            return prepared.size();
+        } catch (RuntimeException e) {
+            source.sendFailure(Component.translatable("dialog.reload.failed", e.getMessage()));
             return 0;
         }
     }
-    
-    /**
-     * 重新加载所有对话。
-     */
-    private static int reloadDialogs(CommandContext<CommandSourceStack> context) {
-        CommandSourceStack source = context.getSource();
-        
-        //服务器重新加载对话
-        DialogManager.getInstance().loadDialogsFromServer(source.getServer().getResourceManager());
-        source.sendSuccess(() -> Component.translatable("dialog.command.reload.success_server"), true); // Notify command executor
 
-        //获取所有对话的JSON数据
-        Map<String, String> allDialogJsons = DialogManager.getInstance().getAllDialogJsonsForSync();
-
-        //向所有玩家同步新的对话数据
-        if (!allDialogJsons.isEmpty()) {
-            top.yourzi.dialog.network.NetworkHandler.sendAllDialogsToAllPlayers(allDialogJsons);
-            source.sendSuccess(() -> Component.translatable("dialog.command.reload.sync_sent_all", allDialogJsons.size()), true);
-        } else {
-            source.sendSuccess(() -> Component.translatable("dialog.command.reload.no_dialogs_to_sync"), true);
-            top.yourzi.dialog.network.NetworkHandler.sendAllDialogsToAllPlayers(new java.util.HashMap<>());
-        }
-        
-        return 1;
+    private static int list(CommandSourceStack source) {
+        var definitions = ServerDialogSessions.get().catalog().snapshot();
+        definitions.values().stream().sorted(java.util.Comparator.comparing(top.yourzi.dialog.core.DialogDefinition::id))
+                .forEach(def -> source.sendSuccess(() -> Component.literal(def.id() + " — " + def.title()), false));
+        return definitions.size();
     }
-    
-    /**
-     * 列出所有可用的对话。
-     */
-    private static int listDialogs(CommandContext<CommandSourceStack> context) {
-        CommandSourceStack source = context.getSource();
-        
-        // 列出所有对话
-        source.sendSuccess(() -> Component.translatable("dialog.command.list.header"), false);
 
-        // 获取所有对话的ID和名称
-        List<String> dialogIds = new ArrayList<>();
-        List<String> dialogNames = new ArrayList<>();
-
-        // 从 DialogManager 获取所有对话序列
-        Map<String, DialogSequence> dialogSequences = DialogManager.getInstance().getAllDialogSequences();
-        dialogSequences.forEach((id, sequence) -> {
-            dialogIds.add(id);
-            dialogNames.add(sequence.getTitle());
-        });
-
-        // 如果是玩家执行的命令，则向该玩家发送网络包
-        if (source.getEntity() instanceof ServerPlayer player) {
-            top.yourzi.dialog.network.NetworkHandler.sendDialogListToPlayer(player, dialogIds, dialogNames);
-        } else {
-            // 如果是服务器执行的命令，则直接在服务器控制台显示
-            source.sendSuccess(() -> Component.translatable("dialog.command.list.header"), false);
-            for (int i = 0; i < dialogIds.size(); i++) {
-                final int index = i;
-                source.sendSuccess(() -> Component.literal("- " + dialogIds.get(index) + " (" + dialogNames.get(index) + ")"), false);
+    private static int variable(CommandContext<CommandSourceStack> context, boolean write) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = EntityArgument.getPlayer(context, "player");
+        String key = StringArgumentType.getString(context, "key");
+        var variables = SavedDialogVariables.get(context.getSource().getServer()).player(player.getUUID());
+        try {
+            if (write) {
+                String input = StringArgumentType.getString(context, "value");
+                JsonElement value;
+                try { value = JsonParser.parseString(input); } catch (RuntimeException e) { value = new JsonPrimitive(input); }
+                variables.set(key, value);
+                ServerDialogSessions.get().refresh(player);
             }
+            context.getSource().sendSuccess(() -> Component.literal(player.getGameProfile().getName() + " / " + key + " = " + variables.get(key)), false);
+            return 1;
+        } catch (IllegalArgumentException e) {
+            context.getSource().sendFailure(Component.literal(e.getMessage()));
+            return 0;
         }
-        
+    }
+
+    private static int refresh(ServerPlayer player) { ServerDialogSessions.get().refresh(player); return 1; }
+    private static int help(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("/dialog show <id> [player] | list | reload | refresh [player] | var <player> <key> [value]"), false);
         return 1;
     }
 }

@@ -1,7 +1,6 @@
 {
   "key.dialog.open": "Open Dialog",
   "key.categories.dialog": "Visual Novel Dialog System",
-  
   "dialog.command.show.success": "Showing dialog: %s",
   "dialog.command.show.player_only": "This command can only be executed by a player",
   "dialog.command.reload.start": "Reloading dialog files...",
@@ -9,7 +8,6 @@
   "dialog.command.reload.sync_sent_all": "Dialogs synchronized to all clients",
   "dialog.command.reload.no_dialogs_to_sync": "No dialogs to synchronize",
   "dialog.command.list.header": "Available dialogs:",
-  
   "dialog.ui.continue": "Continue",
   "dialog.ui.back": "Back",
   "dialog.ui.exit": "Exit",
@@ -18,7 +16,6 @@
   "dialog.ui.close_history": "Close History",
   "dialog.ui.esc": "Exit Dialog",
   "dialog.ui.confirm_esc": "Are you sure you want to exit the current dialog?",
-  
   "dialog.manager.requesting_from_server": "Requesting dialog files from server...",
   "dialog.manager.loading": "Loading dialog files, path: %s",
   "dialog.manager.files_found": "Found %s dialog files",
@@ -33,10 +30,8 @@
   "dialog.manager.sequence_not_found": "Dialog sequence not found: %s",
   "dialog.manager.no_entries": "No entries found in dialog sequence: %s",
   "dialog.manager.target_not_found": "Target dialog entry not found: %s",
-
   "dialog.test_dialog.speaker.tlipoca": "Tlipoca",
   "dialog.test_dialog.speaker.leaf": "Little Leaf",
-
   "dialog.test_dialog.entry.start.text": "Welcome, @i, to this mod! This is a dialog system example.",
   "dialog.test_dialog.entry.1.text": "This dialog system can display multiple characters simultaneously and show portraits in left, center, and right positions. (In order to save space, the corresponding resource files for the portraits are not attached to the mod)",
   "dialog.test_dialog.entry.2.text": "You can configure dialog content via JSON files, including text, speaker, portraits and their positions, opacity, etc., allowing for simple, efficient, and comprehensive customization.",
@@ -60,12 +55,16 @@
   "dialog.test_dialog.entry.item.text": "Rendered items can be customized at the top of the dialog, including NBT and quantity.",
   "dialog.test_dialog.entry.end.text": "Thank you for using this mod! Use the /dialog show test_dialog command to open this dialog again.",
   "dialog.test_dialog.entry.hidden_entry.text": "This entry is hidden from players in survival mode",
-  "dialog.test_dialog.entry.background_cg.text":"You can also add custom images as CG to the background",
-
+  "dialog.test_dialog.entry.background_cg.text": "You can also add custom images as CG to the background",
   "dialog.test_dialog.option.more_info": "Learn more about the dialog system",
   "dialog.test_dialog.option.end_dialog": "End dialog",
   "dialog.test_dialog.option.hidden_option": "Hidden option, only visible to players in survival mode",
   "dialog.test_dialog.option.weather_rain": "Set weather to rain",
   "dialog.test_dialog.option.weather_clear": "Set weather to clear",
-  "dialog.test_dialog.option.weather_thunder": "Set weather to thunder"
+  "dialog.test_dialog.option.weather_thunder": "Set weather to thunder",
+  "dialog.error.runtime": "The dialog could not continue. Please contact an administrator.",
+  "dialog.error.unavailable": "Cannot open dialog %s: missing, unavailable, or invalid.",
+  "dialog.unavailable": "There is no available conversation right now.",
+  "dialog.reload.success": "Loaded %s dialogs. Active conversations keep their original definition.",
+  "dialog.reload.failed": "Reload rejected; previous dialogs retained: %s"
 }
